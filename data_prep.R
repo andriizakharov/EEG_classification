@@ -1,6 +1,7 @@
 library(R.matlab)
 library(ggplot2)
 library(MASS)
+library(caret)
 source("utils.R")
 
 ###
@@ -67,42 +68,38 @@ for (i in 1:n_subj) {
     cov_subj_cl_1 <- avg_cov_mat(dat_subj_cl_1)
     cov_subj_cl_2 <- avg_cov_mat(dat_subj_cl_2)
     
+    # get the projection matrix
+    W <- proj_mat(cov_subj_cl_1, cov_subj_cl_2)
+    
     # loop over 5 different k's 
     for (k in k_list){
-        # get the projection matrix using k pairs of eigenvectors (first and last)
-        W <- proj_mat(cov_subj_cl_1, cov_subj_cl_2)
-        
-        # TBD: 1) http://www.dsp.toronto.edu/~haiping/Publication/R-CSP_EMBC2009.pdf formula 13
-        # implement that over all trials, getting a matrix of new features for each class
-        # 2) put both classes into one data frame with class labels
-        # 3) split into train / test set
-        # 4) run MASS::lda over this data frame, 
-        # see https://tgmstat.wordpress.com/2014/01/15/computing-and-visualizing-lda-in-r/
-        
-        # calculate feature matrices
+        # calculate feature matrices taking k pairs of projection vectors (first and last)
         feat_mat_cl_1 <- feature_mat(dat_subj_cl_1, W, k)
         feat_mat_cl_2 <- feature_mat(dat_subj_cl_2, W, k)
         
         # create new data frame for this subject
         df_subj <- data.frame(v1 = c(feat_mat_cl_1[, 1], feat_mat_cl_2[, 1]),
                               v2 = c(feat_mat_cl_1[, 2], feat_mat_cl_2[, 2]),
-                              class = c(rep(1, nrow(feat_mat_cl_1)), 
-                                        rep(2, nrow(feat_mat_cl_2))))
+                              class = factor(c(rep(1, nrow(feat_mat_cl_1)), 
+                                        rep(2, nrow(feat_mat_cl_2)))))
         
-        # shuffle it row-wise
-        df_subj <- df_subj[sample(nrow(df_subj)), ]
+        ## use caret to classify
+        # # split into 80% train, 20% test
+        # train_idx <- createDataPartition(df_subj$class, p = .8, 
+        #                                  list = FALSE, times = 1)
+        # df_subj_train <- df_subj[train_idx, ]
+        # df_subj_test <- df_subj[-train_idx, ]
         
-        # split into 80% train, 20% test
-        df_subj_train <- df_subj[1:(round(0.8*nrow(df_subj))), ]
-        df_subj_test <- df_subj[(round(0.8*nrow(df_subj))+1):nrow(df_subj), ]
+        # define the training parameters - 10-fold CV
+        fit_control <- trainControl(method = "cv", number = 20)
         
         # run lda, get predictions
-        mod <- MASS::lda(class ~ ., data = df_subj_train)
-        preds <- predict(mod, df_subj_test)
-        #preds_cl <- ifelse(preds$posterior[, 1] > 0.5, 1, 2)
-        
-        # calculate accuracy
-        acc <- mean(as.numeric(preds$class) == df_subj_test["class"])
+        mod <- train(class ~ ., data = df_subj,
+                     method = "lda", trControl = fit_control)
+        # preds <- predict(mod, df_subj_test)
+
+        # get accuracy
+        acc <- mod$results$Accuracy
         
         # save subject, k, and acc to the results data frame
         subj <- strsplit(filelist[i], "_")[[1]][1]
@@ -112,10 +109,10 @@ for (i in 1:n_subj) {
     }
 }
 
-acc_plot <- ggplot(data = results_df, aes(x = subj, y = acc, fill = k)) +
-    facet_grid(k ~ .) +
-    geom_col()
-acc_plot
+# acc_plot <- ggplot(data = results_df, aes(x = subj, y = acc, fill = k)) +
+#     facet_grid(k ~ .) +
+#     geom_col()
+# acc_plot
 
 acc_plot2 <- ggplot(data = results_df, aes(x = subj, y = acc, fill = as.factor(k))) +
     geom_col(position = "dodge") +
